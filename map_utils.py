@@ -84,7 +84,7 @@ def polar_to_cart(scan, angles):
     '''
     Converts polar coordinates to cartesian coordinates
     Input:
-        scan - LiDAR range (radius)
+        scan - LiDAR range
         angles - LiDAR angles
     Output:
         array [x,y] - array of x,y coordinates corresponding to polar coords
@@ -104,25 +104,25 @@ def lidar_to_world(lidar_hit, state=None, Particles=None):
         world_hit - Collection of x,y coordinates from lidar scan in map frame
     '''
 
-    # lidar wrt body
-    y_lb = 0.136 #offset from lidar to middle of robot
-    T_lb = np.array([[1,0,0],[0,1,y_lb],[0,0,1]]) 
-    R_lb = np.array([[1, 0, 0],[0, 1, 0],[0, 0, 1]]) #no rotation needed
-    H_lb = np.dot(T_lb, R_lb)
+    # lidar to body
+    y_bl = 0.136 #offset from lidar to middle of robot
+    T_bl = np.array([[1,0,0],[0,1,y_bl],[0,0,1]]) 
+    R_bl = np.array([[1, 0, 0],[0, 1, 0],[0, 0, 1]]) #no rotation needed
+    H_bl = np.dot(T_bl, R_bl)
 
     if Particles is None: # for mapping
-        # body wrt world
-        x_bw = state[0]
-        y_bw = state[1]
-        T_bw = np.array([[1, 0, x_bw], [0, 1, y_bw], [0, 0, 1]])
-        yaw_bw = state[2]
-        R_bw = np.array([[np.cos(yaw_bw), -np.sin(yaw_bw), 0],[np.sin(yaw_bw), np.cos(yaw_bw), 0],[0, 0, 1]])
-        H_bw = np.dot(T_bw, R_bw)
+        # body to world
+        x_wb = state[0]
+        y_wb = state[1]
+        T_wb = np.array([[1, 0, x_wb], [0, 1, y_wb], [0, 0, 1]])
+        yaw_wb = state[2]
+        R_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), 0],[np.sin(yaw_wb), np.cos(yaw_wb), 0],[0, 0, 1]])
+        H_wb = np.dot(T_wb, R_wb)
 
-        # lidar wrt world
-        H_lw = H_bw.dot(H_lb)
+        # lidar to body to  world
+        H_wl = H_wb.dot(H_bl)
         lidar_hit = np.vstack((lidar_hit,np.ones((1,lidar_hit.shape[1]))))
-        world_hit = np.dot(H_lw, lidar_hit)
+        world_hit = np.dot(H_wl, lidar_hit)
 
         # ground check, keep hits not on ground
         not_floor = world_hit[2]>0.01
@@ -137,15 +137,15 @@ def lidar_to_world(lidar_hit, state=None, Particles=None):
         if lidar_hit.shape[0] < 3:
             lidar_hit = np.vstack((lidar_hit, np.ones((1, lidar_hit.shape[1]))))
         for i in range(nums):
-            # body wrt world
-            T_bw = np.array([[1, 0, states[0,i]], [0, 1, states[1,i]], [0, 0, 1]])
-            yaw_bw = states[2,i]
-            R_bw = np.array([[np.cos(yaw_bw), -np.sin(yaw_bw), 0],[np.sin(yaw_bw), np.cos(yaw_bw), 0],[0, 0, 1]])
-            H_bw = np.dot(T_bw, R_bw)
+            # body to world
+            T_wb = np.array([[1, 0, states[0,i]], [0, 1, states[1,i]], [0, 0, 1]])
+            yaw_wb = states[2,i]
+            R_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), 0],[np.sin(yaw_wb), np.cos(yaw_wb), 0],[0, 0, 1]])
+            H_wb = np.dot(T_wb, R_wb)
 
-            # lidar wrt world
-            H_lw = H_bw.dot(H_lb)
-            world_hit = np.dot(H_lw, lidar_hit)[:3,:]
+            # lidar to body to world
+            H_wl = H_wb.dot(H_bl)
+            world_hit = np.dot(H_wl, lidar_hit)[:3,:]
 
             # ground check, keep hits not on ground
             not_floor = world_hit[2] > 0.01
@@ -159,8 +159,11 @@ def texture_mapping(rgb, depth, state, Map, Plot):
     Input:
         rgb - rgb image
         depth - disparity image
+        state - best particle's state
+        Map - map object for converting to map 
+        Plot - updating plot
     Output:
-        floor_texture - array of tuples containing depth and associated color of floor
+        None
     '''
     # read images
     img = cv2.imread(rgb)
@@ -206,7 +209,6 @@ def texture_mapping(rgb, depth, state, Map, Plot):
     disparity_points = np.multiply(disparity_points, colors_and_depth[2,:])
     disparity_points = np.vstack((disparity_points, np.ones((1,np.shape(disparity_points)[1]))))
 
-
     # convert optical to regular
     disparity_points = np.matrix([[0, 0, 1, 0], [-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0, 1]])*disparity_points
 
@@ -236,7 +238,7 @@ def texture_mapping(rgb, depth, state, Map, Plot):
     disparity_points = np.linalg.inv(T_cw)*disparity_points
 
     # threshold on Z-axis in world frame (height) to get ground plane
-    ground_plane = np.logical_and((disparity_points[2] >= -5.0), (disparity_points[2] <= 5.0))
+    ground_plane = np.logical_and((disparity_points[2] >= -1.5), (disparity_points[2] <= 1.5))
 
     disparity_points = np.vstack((disparity_points[0, :][ground_plane], disparity_points[1, :][ground_plane],
                              disparity_points[2, :][ground_plane], disparity_points[3, :][ground_plane]))
@@ -311,7 +313,7 @@ def update_map(hit, state, Map):
     Map.grid[Map.grid<-Map.bound] = -Map.bound
 
 
-def diff_model(current_state,w,ld,t):
+def diff_model(current_state,w,ld_r,ld_l,t):
     '''
     Calculate new x,y and theta according to differential drive model (and IMU measurements)
     Input:
@@ -322,16 +324,21 @@ def diff_model(current_state,w,ld,t):
     Output:
         new_state - x, y, theta of new state
     '''
+    # get current state of particle
     x = current_state[0]
     y = current_state[1]
     theta = current_state[2]
+
+    # convert encoder displacement to angular velocity
+    ld = (ld_r + ld_l)/2.0
+    enc_w = (ld_r/t - ld_l/t)/(0.311)
     
     # update under differential drive model
     new_x = x + ld*(np.sin(w/2))*np.cos(theta + w/2)/(w/2)
     new_y = y + ld*(np.sin(w/2))*np.sin(theta + w/2)/(w/2)
 
-    # under advice, only use IMU data for yaw rate
-    new_theta = theta + t*w
+    # use both IMU and encoder, but weigh it towards IMU
+    new_theta = theta + t*(0.98*w + 0.02*enc_w)
 
     return np.hstack((new_x,new_y,new_theta))
 
@@ -354,7 +361,7 @@ def particle_update(Particles, Map, lidar_hit, new_state):
     # update state
     Particles.states[0] = new_state[0] + 0.05*noise
     Particles.states[1] = new_state[1] + 0.05*noise
-    Particles.states[2] = new_state[2]
+    Particles.states[2] = new_state[2] + 0.05*np.random.normal(0, 0.005)
 
     # get particle's lidar hits
     particles_lidar_hit = lidar_to_world(lidar_hit, Particles=Particles)
@@ -389,7 +396,7 @@ def particle_update(Particles, Map, lidar_hit, new_state):
 
 
 
-def write_image(DeadReckoning, State, Map, Trajectory, Lidar, Plot, idx, RGB, Depth):
+def write_image(DeadReckoning, State, Map, Trajectory, Lidar, Plot, idx, RGB, Depth, dataset, texture=True):
     '''
     Plotting function
     '''
@@ -399,9 +406,13 @@ def write_image(DeadReckoning, State, Map, Trajectory, Lidar, Plot, idx, RGB, De
 
     # plot free pixels with texture map
     free_mask = Map.grid<Map.free_thres
-    Plot[free_mask] = [255,255,255] # white for free
 
-    #texture_mapping(RGB,Depth,State,Map,Plot)
+    #comment out white pixels or texture mapping to see each
+    if texture == True:
+        texture_mapping(RGB,Depth,State,Map,Plot)
+    else:
+        Plot[free_mask] = [255,255,255] # white for free
+    
 
     # plot the unexplored as gray
     und_mask = np.logical_not(np.logical_or(occ_mask, free_mask))
@@ -410,7 +421,7 @@ def write_image(DeadReckoning, State, Map, Trajectory, Lidar, Plot, idx, RGB, De
     # plot dead reckoning
     dead = np.asarray(DeadReckoning)[:,:2].reshape(-1,2)
     dead_pixel = world_to_map(dead.T,Map)
-    Plot[dead_pixel[1],dead_pixel[0]] = [0,255,0] # blue for dead reckoning
+    Plot[dead_pixel[1],dead_pixel[0]] = [255,0,0] # blue for dead reckoning
 
     # plot trajectory
     traj = np.asarray(Trajectory)[:,:2]
@@ -418,31 +429,25 @@ def write_image(DeadReckoning, State, Map, Trajectory, Lidar, Plot, idx, RGB, De
     Plot[traj_pixel[1],traj_pixel[0]] = [0,0,255] # red for trajectory
     
     # write to file
-    path = 'images'
+    path = 'images' + str(dataset)
     cv2.imwrite(os.path.join(path ,'SLAM_'+str(idx)+'.png'), Plot)
 
    
 def convert_frames_to_video(pathIn,pathOut,fps):
-    frame_array = []
-    files = [f for f in os.listdir(pathIn) if isfile(join(pathIn, f))]
- 
+    files = [f for f in os.listdir(pathIn) if isfile(join(pathIn, f)) and join(pathIn,f)[-4:] == '.png']
     #for sorting the file names properly
     files.sort(key = lambda x: int(x[5:-4]))
+    filename=pathIn + files[0]
+    img = cv2.imread(filename)
+    height,width,layers = img.shape
+    size = (width,height)
+    out = cv2.VideoWriter(pathOut,cv2.VideoWriter_fourcc(*'DIVX'), fps, size)
     for i in range(len(files)):
         filename=pathIn + files[i]
-        #reading each files
+        #reading each file
         img = cv2.imread(filename)
-        height, width, layers = img.shape
-        size = (width,height)
         #inserting the frames into an image array
-        frame_array.append(img)
+        out.write(img)
         if i%1000 == 0:
-            print('Converting image frames: ' + str(i) + '/4961')
- 
-    out = cv2.VideoWriter(pathOut,cv2.VideoWriter_fourcc(*'DIVX'), fps, size)
- 
-    for i in range(len(frame_array)):
-        # writing to a image array
-        out.write(frame_array[i])
+            print('Converting image frames: ' + str(i))
     out.release()
- 

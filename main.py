@@ -6,16 +6,16 @@ import map_particle_class
 import os
 
 
-def run_slam(dataset):
+def run_slam(dataset,texture=True):
     ''' 
     Run Particle filter algorithm, and plot results
     '''
     # load and process data
-    enc_data, imu_data, lidar_data, kinect_data = load_data(dataset)
+    enc_data, imu_data, lidar_data, kinect_data = load_data(dataset,texture)
     
     # define properties of Particles
     num_particles = 100
-    n_thres = 0.05
+    n_thres = 95
 
     # initialize Map and Particle objects 
     Map = map_particle_class.Map()
@@ -48,17 +48,23 @@ def run_slam(dataset):
         good_range = np.logical_and(lidar_scan>=lidar_data['min'], lidar_scan<=lidar_data['max']) # remove invalid lidar scans
         lidar_hit = polar_to_cart(lidar_scan[good_range], lidar_data['angles'][good_range]) #change to x,y coordinates
 
-        # find closest imu, enc, kinect data to lidar
+        # find closest imu, enc to lidar
         imu_idx = np.argmin(np.abs(imu_data['ts']-lidar_data['ts'][lidar_idx]))
         imu_av = imu_data['av'][imu_idx]
         enc_idx = np.argmin(np.abs(enc_data['ts']-lidar_data['ts'][lidar_idx]))
-        enc_ld = enc_data['ld'][enc_idx]
-        kinect_d_idx = np.argmin(np.abs(kinect_data['d_ts']-lidar_data['ts'][lidar_idx]))
-        kinect_rgb_idx = np.argmin(np.abs(kinect_data['rgb_ts']-lidar_data['ts'][lidar_idx]))
-        
-        # find corresponding kinect image file
-        kinect_d_file = 'dataRGBD/Disparity'+str(dataset)+'/disparity'+str(dataset)+'_'+str(kinect_d_idx+1)+'.png'
-        kinect_rgb_file = 'dataRGBD/RGB'+str(dataset)+'/rgb'+str(dataset)+'_'+str(kinect_rgb_idx+1)+'.png'
+        enc_ld_r = enc_data['ld_r'][enc_idx]
+        enc_ld_l = enc_data['ld_l'][enc_idx]
+
+        if texture == True:
+            # find closest kinect data to lidar
+            kinect_d_idx = np.argmin(np.abs(kinect_data['d_ts']-lidar_data['ts'][lidar_idx]))
+            kinect_rgb_idx = np.argmin(np.abs(kinect_data['rgb_ts']-lidar_data['ts'][lidar_idx]))
+            # find corresponding kinect image file
+            kinect_d_file = 'dataRGBD/Disparity'+str(dataset)+'/disparity'+str(dataset)+'_'+str(kinect_d_idx+1)+'.png'
+            kinect_rgb_file = 'dataRGBD/RGB'+str(dataset)+'/rgb'+str(dataset)+'_'+str(kinect_rgb_idx+1)+'.png'
+        else:
+            kinect_d_file = ''
+            kinect_rgb_file = ''
         
         # transform hit from lidar to world coordinate
         world_hit = lidar_to_world(lidar_hit, state=state)
@@ -70,25 +76,22 @@ def run_slam(dataset):
         if lidar_idx == 0:
             continue
         
-
         # -------- Localization -------- #
 
         # use differential drive model (and IMU) to predict new position
 
-        # dead reckoning
-        DeadReckoning_Particle.states = diff_model(DeadReckoning_Particle.states,imu_av,enc_ld,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1]).reshape(3,1)
+        # dead reckoning (no update)
+        DeadReckoning_Particle.states = diff_model(DeadReckoning_Particle.states,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1]).reshape(3,1)
         
-        # particle update state
-        new_state = diff_model(state,imu_av,enc_ld,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1])
-
-        # update particle 
+        # find new state of particle and update particle 
+        new_state = diff_model(state,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1])
         particle_update(Particles, Map, world_hit, new_state)
-
+        
         # write image
-        write_image(DeadReckoning, new_state, Map, Trajectory, world_hit, Plot, lidar_idx, kinect_rgb_file, kinect_d_file)
+        write_image(DeadReckoning, new_state, Map, Trajectory, world_hit, Plot, lidar_idx, kinect_rgb_file, kinect_d_file, dataset, texture)
 
         if lidar_idx%1000 == 0:
-            print('Mapping scans: ' + str(lidar_idx) + '/4961')
+            print('Mapping scans: ' + str(lidar_idx) + '/' + str(num_scans))
 
 
 def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
@@ -110,7 +113,7 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     return y
 
 
-def load_data(dataset):
+def load_data(dataset,texture):
     '''
     Load and preprocess data
     Output:
@@ -122,8 +125,10 @@ def load_data(dataset):
     imu_data = ld.get_imu(dataset)
     lidar_data = ld.get_lidar(dataset)
     enc_data = ld.get_enc(dataset)
-    kinect_data = ld.get_kinect_time(dataset)
-
+    if texture == True:
+        kinect_data = ld.get_kinect_time(dataset)
+    else:
+        kinect_data = 0
     # remove bias for odometry, init state is (0,0,0)
     yaw_bias_av = np.mean(imu_data['av'][0:380])
     imu_data['av'] -= yaw_bias_av
@@ -139,9 +144,9 @@ def load_data(dataset):
 
 
 if __name__ == '__main__':
-    dataset = 20
-    run_slam(dataset)
-    pathIn= 'images/'
-    pathOut = 'video.avi'
+    dataset = 21
+    run_slam(dataset,texture=False)
+    pathIn= 'images' + str(dataset) +'/'
+    pathOut = 'video' + str(dataset) + '.avi'
     fps = 50.0
     convert_frames_to_video(pathIn, pathOut, fps)

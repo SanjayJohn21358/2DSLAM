@@ -9,10 +9,10 @@ class Map(object):
         self.res = 20 # cells per meter
         self.size = 60 # meters
         self.grid = np.zeros((self.res*self.size, self.res*self.size)) # log odds
-        self.occ = 0.874
-        self.free = -0.426
-        self.occ_thres = 2.197
-        self.free_thres = -1.386
+        self.occ = 0.8
+        self.free = -0.4
+        self.occ_thres = 2.0
+        self.free_thres = -1.3
         self.bound = 100 
 
 

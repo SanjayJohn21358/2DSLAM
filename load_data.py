@@ -6,7 +6,8 @@ def get_enc(dataset):
 		encoder_stamps = data["time_stamps"] # encoder time stamps
 
 	enc_data = {}
-	enc_data['ld'] = (((encoder_counts[0] + encoder_counts[2])*0.0022*0.5) + ((encoder_counts[1] + encoder_counts[3])*0.0022*0.5))*0.5
+	enc_data['ld_r'] = (encoder_counts[0] + encoder_counts[2])*0.0022*0.5
+	enc_data['ld_l'] = (encoder_counts[1] + encoder_counts[3])*0.0022*0.5
 	enc_data['ts'] = encoder_stamps
 	return enc_data
 
