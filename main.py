@@ -96,7 +96,7 @@ def run_slam(dataset,texture=True):
         # ------- Plotting and Texture Mapping -------- #
 
         # write image
-        write_image(dead_reckoning, Map, plot, trajectory, lidar_idx, kinect_rgb_file, kinect_d_file, dataset, new_state, texture)
+        write_image(dead_reckoning, Map, plot, trajectory, lidar_idx, kinect_rgb_file, kinect_d_file, new_state, dataset, texture)
 
         if lidar_idx%1000 == 0:
             print('Mapping scans: ' + str(lidar_idx) + '/' + str(num_scans))
@@ -138,7 +138,7 @@ def load_data(dataset,texture):
 
 if __name__ == '__main__':
     dataset = 20
-    run_slam(dataset,texture=False)
+    run_slam(dataset,texture=True)
     pathIn= 'images' + str(dataset) +'/'
     pathOut = 'video' + str(dataset) + '.avi'
     fps = 50.0

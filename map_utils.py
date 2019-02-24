@@ -126,15 +126,14 @@ def lidar_to_world(lidar_hit, state=None, Particles=None):
     y_bl = 0.136 #offset from lidar to middle of robot
     T_bl = np.array([[1,0,0],[0,1,y_bl],[0,0,1]]) 
 
+    # when no particle is passed, this is used for mapping
     if Particles is None:
         # body to world
         x_wb = state[0]
         y_wb = state[1]
         yaw_wb = state[2]
-        T_wb = np.array([[1, 0, x_wb], [0, 1, y_wb], [0, 0, 1]])
-        R_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), 0],[np.sin(yaw_wb), np.cos(yaw_wb), 0],[0, 0, 1]])
-        H_wb = np.dot(T_wb, R_wb)
-
+        H_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), x_wb],[np.sin(yaw_wb), np.cos(yaw_wb), y_wb],[0, 0, 1]])
+  
         # lidar to body to world
         H_wl = H_wb.dot(T_bl)
         lidar_hit = np.vstack((lidar_hit,np.ones((1,lidar_hit.shape[1]))))
@@ -146,7 +145,8 @@ def lidar_to_world(lidar_hit, state=None, Particles=None):
 
         return world_hit[:3,:]
 
-    else: # for particles update
+    # when particle is passed, this allows for correlation with map
+    else: 
         nums = Particles.nums
         states = Particles.states
         particles_hit = []
@@ -157,9 +157,7 @@ def lidar_to_world(lidar_hit, state=None, Particles=None):
             x_wb = states[0,i]
             y_wb = states[1,i]
             yaw_wb = states[2,i]
-            T_wb = np.array([[1, 0, x_wb], [0, 1, y_wb], [0, 0, 1]])
-            R_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), 0],[np.sin(yaw_wb), np.cos(yaw_wb), 0],[0, 0, 1]])
-            H_wb = np.dot(T_wb, R_wb)
+            H_wb = np.array([[np.cos(yaw_wb), -np.sin(yaw_wb), x_wb],[np.sin(yaw_wb), np.cos(yaw_wb), y_wb],[0, 0, 1]])
 
             # lidar to body to world
             H_wl = H_wb.dot(T_bl)
@@ -185,13 +183,14 @@ def world_to_map(xy_w,Map):
     # make pixel grid of zeros
     pixels = np.zeros(xy_w.shape, dtype=int)
 
-    # coordinates to pixels (flip map around so that forward is left on map)
-    pixels[0] = ((xy_w[0] + Map.size/2)*Map.res).astype(np.int)
-    pixels[1] = ((-xy_w[1] + Map.size/2)*Map.res).astype(np.int)
+    # coordinates to pixels 
+    # make 0,0 correspond to center of grid
+    # flip map around so that forward is left on map)
+    pixels[0] = ((xy_w[0] + Map.size/2)/Map.res).astype(np.int)
+    pixels[1] = ((-xy_w[1] + Map.size/2)/Map.res).astype(np.int)
 
     # make sure pixels stay inside grid to avoid indexing errors
-    center = Map.size*Map.res/2
-    valid = np.logical_and(np.abs(pixels[0]-center) < center, np.abs(pixels[1]-center) < center)
+    valid = np.logical_and.reduce([pixels[0] >= 0, pixels[0] < Map.size/Map.res, pixels[1] >= 0, pixels[1] < Map.size/Map.res])
     pixels = pixels[:,valid]
 
     return pixels
@@ -215,7 +214,7 @@ def update_map(hit, state, Map):
     # draw contour to map region between particle and lidar hits
     mask = np.zeros(Map.grid.shape)
     contour = np.hstack((world_to_map(state, Map).reshape(-1,1), occupied_cells))
-    cv2.drawContours(image=mask, contours = [contour.T], contourIdx = -1, color = Map.free, thickness=-1)
+    cv2.drawContours(image = mask, contours = [contour.T], contourIdx = -1, color = Map.free, thickness = -1)
     Map.grid += mask
 
     # stop grid values from exploding
@@ -229,7 +228,8 @@ def diff_model_predict(current_state,w,ld_r,ld_l,t):
     Input:
         current_state - x, y and theta of current state
         w - angular velocity (yaw rate) from IMU
-        ld - linear displacement from encoders
+        ld_r - linear displacement from right encoders
+        ld_l - lienar displacement from left encoders
         t - time between measurements
     Output:
         new_state - x, y, theta of new state
@@ -444,9 +444,9 @@ def write_image(dead_reckoning, Map, plot, trajectory, idx, rgb, depth, state, d
     else:
         plot[free_mask] = [255,255,255] # white for free
     
-    # plot the unexplored as gray
-    und_mask = np.logical_not(np.logical_or(occ_mask, free_mask))
-    plot[und_mask] = [128,128,128] # gray for unexplored
+    # plot the rest as gray
+    rest_mask = np.logical_not(np.logical_or(occ_mask, free_mask))
+    plot[rest_mask] = [128,128,128] # gray for unexplored
     
     # plot dead reckoning
     dead = np.asarray(dead_reckoning)[:,:2].reshape(-1,2)
