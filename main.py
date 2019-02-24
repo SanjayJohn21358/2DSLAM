@@ -1,7 +1,6 @@
 import numpy as np
 import load_data as ld
 from map_utils import *
-from scipy.signal import butter, lfilter, freqz
 import map_particle_class
 import os
 
@@ -15,38 +14,39 @@ def run_slam(dataset,texture=True):
     
     # define properties of Particles
     num_particles = 100
-    n_thres = 95
+    n_thres = 99.0
 
     # initialize Map and Particle objects 
     Map = map_particle_class.Map()
-    Particles = map_particle_class.Particles(num_particles,n_thres)
     DeadReckoning_Particle = map_particle_class.Particles(1,n_thres)
-    Trajectory = []
-    DeadReckoning = []
+    Particles = map_particle_class.Particles(num_particles,n_thres)
 
-    # init plot
+    # keeps track of particle position
+    dead_reckoning = []
+    trajectory = []
+
+    # make plot
     h, w = Map.grid.shape
-    Plot = np.zeros((h,w,3),np.uint8)
-    num_scans = lidar_data['ranges'].shape[1]
-
+    plot = np.zeros((h,w,3),np.uint8)
 
     #run through all scans
+    num_scans = lidar_data['ranges'].shape[1]
     speed = 1   # number of scans to skip, 1 = 0
     for lidar_idx in range(0, num_scans, speed):
 
-        # pick best particle
+        # pick best particle for next round (part of update step)
         state = Particles.states[:, np.argmax(Particles.weights)]
 
         # add state of particle to trajectory
-        DeadReckoning.append(np.copy(DeadReckoning_Particle.states[:,0]))
-        Trajectory.append(np.copy(state))
+        dead_reckoning.append(np.copy(DeadReckoning_Particle.states[:,0]))
+        trajectory.append(np.copy(state))
 
-        # --------  Mapping --------- #
+        # -------- Synchronization -------- #
 
         # extract lidar scan within range and transform to lidar's cartesian coordinate
         lidar_scan = lidar_data['ranges'][:,lidar_idx] #take each scan
-        good_range = np.logical_and(lidar_scan>=lidar_data['min'], lidar_scan<=lidar_data['max']) # remove invalid lidar scans
-        lidar_hit = polar_to_cart(lidar_scan[good_range], lidar_data['angles'][good_range]) #change to x,y coordinates
+        valid = np.logical_and(lidar_scan>=lidar_data['min'], lidar_scan<=lidar_data['max']) # remove invalid lidar scans
+        lidar_hit = polar_to_cart(lidar_scan[valid], lidar_data['angles'][valid]) #change to x,y coordinates
 
         # find closest imu, enc to lidar
         imu_idx = np.argmin(np.abs(imu_data['ts']-lidar_data['ts'][lidar_idx]))
@@ -65,6 +65,8 @@ def run_slam(dataset,texture=True):
         else:
             kinect_d_file = ''
             kinect_rgb_file = ''
+
+        # --------  Mapping --------- #
         
         # transform hit from lidar to world coordinate
         world_hit = lidar_to_world(lidar_hit, state=state)
@@ -76,50 +78,40 @@ def run_slam(dataset,texture=True):
         if lidar_idx == 0:
             continue
         
-        # -------- Localization -------- #
+        # -------- Prediction -------- #
 
         # use differential drive model (and IMU) to predict new position
 
         # dead reckoning (no update)
-        DeadReckoning_Particle.states = diff_model(DeadReckoning_Particle.states,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1]).reshape(3,1)
+        DeadReckoning_Particle.states = diff_model_predict(DeadReckoning_Particle.states,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1]).reshape(3,1)
         
-        # find new state of particle and update particle 
-        new_state = diff_model(state,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1])
-        particle_update(Particles, Map, world_hit, new_state)
+        # find new state of particle to update particle 
+        new_state = diff_model_predict(state,imu_av,enc_ld_r,enc_ld_l,lidar_data['ts'][lidar_idx] - lidar_data['ts'][lidar_idx-1])
         
+        # -------- Update -------- #
+
+        # update particle weights (find lidar hits for all particles, use lidar_to_world)
+        particle_update(Particles, Map, lidar_hit, new_state)
+        
+        # ------- Plotting and Texture Mapping -------- #
+
         # write image
-        write_image(DeadReckoning, new_state, Map, Trajectory, world_hit, Plot, lidar_idx, kinect_rgb_file, kinect_d_file, dataset, texture)
+        write_image(dead_reckoning, Map, plot, trajectory, lidar_idx, kinect_rgb_file, kinect_d_file, dataset, new_state, texture)
 
         if lidar_idx%1000 == 0:
             print('Mapping scans: ' + str(lidar_idx) + '/' + str(num_scans))
 
 
-def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
-    '''
-    Define and implement Butterworth lowpass filter
-    Input:
-        data - data to be filtered
-        cutoff - cutoff frequency in Hz
-        fs - sampling rate
-        order - order of filter
-    Output:
-        y - output of filter
-    '''
-    nyq = 0.5 * fs
-    low = lowcut / nyq
-    high = highcut / nyq
-    b, a = butter(order, [low,high], btype='band', analog=False)
-    y = lfilter(b, a, data)
-    return y
-
-
 def load_data(dataset,texture):
     '''
     Load and preprocess data
+    Input:
+        dataset - number of dataset to use
+        texture - boolean to switch on texture mapping (include kinect data)
     Output:
-        enc_data: Encoder data in dictionary, with left and right displacement, and timestamps
-        imu_data: IMU data in dictionary, with angular velocity (yaw rate), linear acceleration and timestamps
-        lidar_data: LiDAR data in dictionary, with ranges, angles and timestamps
+        enc_data - Encoder data in dictionary, with left and right displacement, and timestamps
+        imu_data -  IMU data in dictionary, with angular velocity (yaw rate), linear acceleration and timestamps
+        lidar_data - LiDAR data in dictionary, with ranges, angles and timestamps
     '''
     #load data
     imu_data = ld.get_imu(dataset)
@@ -129,13 +121,14 @@ def load_data(dataset,texture):
         kinect_data = ld.get_kinect_time(dataset)
     else:
         kinect_data = 0
+
     # remove bias for odometry, init state is (0,0,0)
     yaw_bias_av = np.mean(imu_data['av'][0:380])
     imu_data['av'] -= yaw_bias_av
 
-    #apply low pass filter
+    #apply band pass filter
     order = 1
-    fs = 50      # sample rate, Hz
+    fs = 50  # sample rate, Hz
     low = 0.000001 # desired band frequency of the filter, Hz
     high = 10
     imu_data['av'] = butter_bandpass_filter(imu_data['av'],low,high,fs,order)
@@ -144,7 +137,7 @@ def load_data(dataset,texture):
 
 
 if __name__ == '__main__':
-    dataset = 21
+    dataset = 20
     run_slam(dataset,texture=False)
     pathIn= 'images' + str(dataset) +'/'
     pathOut = 'video' + str(dataset) + '.avi'
